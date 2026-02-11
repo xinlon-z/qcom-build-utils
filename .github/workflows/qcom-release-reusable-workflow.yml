@@ -1,6 +1,10 @@
 name: Release Promotion Workflow
 description: |
-  This reusable workflow is called by a user to create a release of the package
+  This reusable workflow is called by a user to create a release of the package. A release is the act of changing
+  the latest changelog entry's 'suite' from UNRELEASED to unstable, building the package, committing the changelog change,
+  tagging the release commit, and bumping the changelog for the next development cycle. 
+  At last, the built package is uploaded to a private S3 bucket for later retrieval. Included alongside the built package
+  is a provenance file containing metadata about the source and package repositories and commits.
 
 on:
   workflow_call:
@@ -10,10 +14,26 @@ on:
         type: string
         required: true
 
+      debian-branch:
+        description: The debian branch to use to execute the release from. For example branch "debian/qcom-next"
+        type: string
+        required: false
+        default: debian/qcom-next
+
       distro-codename:
         description: The distribution codename to build for. Ex noble, jammy, etc
         type: string
         default: noble
+
+      test-run:
+        description: true if this is a test run. Packages will be uploaded in test folder in S3
+        type: boolean
+        default: true
+        
+      runner:
+        description: The runner to use for the build
+        type: string
+        default: ubuntu-latest
 
     secrets:
       TOKEN:
@@ -21,52 +41,55 @@ on:
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   pkg-release:
 
-    runs-on: ubuntu-latest
+    runs-on: ${{inputs.runner}}
+
+    outputs:
+      complete_version: ${{ steps.changelog.outputs.version }}
 
     defaults:
       run:
         shell: bash
 
+    container:
+      # This docker image is built and published by the qualcomm-linux/docker_deb_build repo CI workflow
+      image: ghcr.io/qualcomm-linux/pkg-builder:${{inputs.runner == 'ubuntu-latest' && 'amd64' || 'arm64'}}-${{inputs.distro-codename}}
+      options: --privileged
+      credentials:
+        username: ${{vars.DEB_PKG_BOT_CI_USERNAME}}
+        password: ${{secrets.TOKEN}}
+
     steps:
 
-      - name: Install devscripts
-        run: sudo apt update && sudo apt install -y devscripts
+      - name: Checkout qcom-build-utils
+        uses: actions/checkout@v4
+        with:
+          repository: qualcomm-linux/qcom-build-utils
+          ref: ${{inputs.qcom-build-utils-ref}}
+          token: ${{secrets.TOKEN}}
+          path: ./qcom-build-utils
+          fetch-depth: 1
+          sparse-checkout: |
+            .github
+            scripts
 
       - name: Checkout Packaging Repo
         uses: actions/checkout@v4
         with:
-          clean: false
           token: ${{secrets.TOKEN}}
           path: ./package-repo
           fetch-depth: 0
           fetch-tags: true
 
+      # Take the latest changelog entry and change the suite name from UNRELEASED to unstable and set timestamp and tag
+      # the inputs.debian-branch branch to debian/<version> where <version> is the version from the changelog. It is conceptually
+      # important that the changelog entry suite is UNRELEASED at any point except in the commit that represents the release.
+      # The commit that represents the release is created in this step and shall only contain the changelog change from UNRELEASED to unstable.
       - name: Changelog suite name change
-        run: |
-          cd ./package-repo
-
-          git checkout debian/latest
-
-          cat debian/changelog
-
-          # Check if the latest changelog entry suite is UNRELEASED
-          if ! head -1 debian/changelog | grep -q 'UNRELEASED'; then
-            echo "Error: The suite in the latest changelog entry is not UNRELEASED." \
-                 "The release process expects the latest entry to be UNRELEASED at any point except in the commit (this one) that represents the release"
-            exit 1
-          fi
-
-          #Update the changelog timestamp
-          dch --release --distribution=unstable "Release"
-
-          cat debian/changelog
-
-      - name: Commit changelog suite change
+        id: changelog
         run: |
           cd ./package-repo
 
@@ -76,11 +99,127 @@ jobs:
           export DEBFULLNAME="${{vars.DEB_PKG_BOT_CI_NAME}}"
           export DEBEMAIL="${{vars.DEB_PKG_BOT_CI_EMAIL}}"
 
+          git checkout ${{inputs.debian-branch}}
+
+          echo "Initial changelog content:"
+          cat debian/changelog | sed 's/^/\x1b[34m/' | sed 's/$/\x1b[0m/'
+
+          # Check if the latest changelog entry suite is UNRELEASED
+          if ! head -1 debian/changelog | grep -q 'UNRELEASED'; then
+            echo "Error: The suite in the latest changelog entry is not UNRELEASED." \
+                 "The release process expects the latest entry to be UNRELEASED at any point except in the commit (this one) that represents the release"
+            exit 1
+          fi
+
           version=$(dpkg-parsechangelog --show-field Version)
-          
-          git commit -a -m "Release version ${version}"
+          echo "version=${version}" >> $GITHUB_OUTPUT
+          echo "Releasing version: ${version} for suite 'unstable'" | sed 's/^/\x1b[32m/' | sed 's/$/\x1b[0m/'
+
+          # This is the important part; change UNRELEASED to unstable and update the changelog timestamp
+          dch --release --distribution=unstable "Release"
+
+          echo "Updated changelog content:"
+          cat debian/changelog | sed 's/^/\x1b[34m/' | sed 's/$/\x1b[0m/'
+
+          git commit -a -m "debian/changelog: Release version ${version} for suite 'unstable'"
 
           git tag debian/${version}
+
+          git log --graph --oneline -n 10 --color=always
+
+      #TODO pkg_repo_branch needs to be dynamic based on the branch used to call the workflow
+      - name: Create provenance file
+        run: |
+          mkdir build
+
+          cd package-repo
+
+          NEAREST_UPSTREAM_BRANCH_TAG=$(git describe --tags --match 'upstream/*' --abbrev=0)
+          NEAREST_UPSTREAM_COMMIT=$(git rev-list -n 1 "$NEAREST_UPSTREAM_BRANCH_TAG")
+          NEAREST_UPSTREAM_TAG=$(git ls-remote --tags "https://github.com/${{vars.UPSTREAM_REPO_GITHUB_NAME}}.git" | \
+            awk -v commit="$NEAREST_UPSTREAM_COMMIT" '$1 == commit && $2 ~ /refs\/tags\// { sub("refs/tags/", "", $2); print $2 }' | head -n1)
+
+          # Now, translate the upstream/* tag to the upstream tag it represents in the upstream repo
+
+
+          # Get the nearest reachable debian/* tag from inputs.debian-branch.
+          # This tag represents the packaging repository state for this release.
+          PACKAGE_REPO_TAG=$(git describe --tags --match 'debian/*' --abbrev=0 ${{inputs.debian-branch}})
+
+          SOURCE=$(grep-dctrl -n -s Source -r '' debian/control | head -n1)
+
+          # Collect all binary package names from debian/control
+          ALL_PKGS=$(grep-dctrl -n -s Package -r '' debian/control | sort -u)
+
+          # Collect dev packages (Section: libdevel)
+          DEV_PKGS=$(grep-dctrl -n -F Section -e libdevel -s Package debian/control | sort -u)
+
+          # Compute MAIN = ALL - DEV (using comm on sorted lists)
+          MAIN_PKGS=$(comm -23 <(printf '%s\n' "$ALL_PKGS") <(printf '%s\n' "$DEV_PKGS"))
+
+          MAIN_PKGS_JSON=$(printf '%s\n' "$MAIN_PKGS" | jq -c -R -s 'split("\n") | map(select(length>0))')
+          DEV_PKGS_JSON=$(printf '%s\n' "$DEV_PKGS"  | jq -c -R -s 'split("\n") | map(select(length>0))')
+
+          #version: The complete version string for this release (e.g. 1.2.3-1)
+
+          #src_repo : The upstream source repository name in github format (user/repo)
+          #src_repo_tag : The tag in the upstream source repository that was used in the last promotion (e.g. v1.2.3)
+          #src_repo_commit : The commit hash in the upstream source repository that corresponds to the src_repo_tag
+          
+          #pkg_repo : The packaging repository name in github format (user/repo)
+          #pkg_repo_tag : The tag in the packaging repository that corresponds to this release (e.g. debian/1.2.3-1)
+          #pkg_repo_commit : The commit hash in the packaging repository that corresponds to the pkg_repo_tag
+          #pkg_repo_upstream_tag : The upstream/* tag in the packaging repository that was used for this release (e.g. upstream/v1.2.3).
+
+          cat > ../build/provenance.json << EOF
+          {
+            "$SOURCE" : {
+              "version": "${{ steps.changelog.outputs.version }}",
+
+              "src_repo": "${{vars.UPSTREAM_REPO_GITHUB_NAME}}",
+              "src_repo_tag": "$NEAREST_UPSTREAM_TAG",
+              "src_repo_commit": "$NEAREST_UPSTREAM_COMMIT",
+
+              "pkg_repo": "${{ github.repository }}",
+              "pkg_repo_tag": "$PACKAGE_REPO_TAG",
+              "pkg_repo_commit": "$(git rev-parse HEAD)",
+              "pkg_repo_upstream_tag": "$NEAREST_UPSTREAM_BRANCH_TAG",
+
+              "packages": $MAIN_PKGS_JSON,
+              "dev-packages": $DEV_PKGS_JSON,
+
+              "build_timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            }
+          }
+          EOF
+
+          echo "Content of the provenance file:"
+          cat ../build/provenance.json | sed 's/^/\x1b[34m/' | sed 's/$/\x1b[0m/'
+
+      - name: Build Debian Packages
+        uses: ./qcom-build-utils/.github/actions/build_package
+        with:
+          distro-codename: ${{inputs.distro-codename}}
+          pkg-dir: package-repo
+          build-dir: build
+
+      - name: Remove files with unauthorized characters
+        run: |
+          rm build/*.build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: build/
+
+      # After the above step that changed the changlog from UNRELEASED to unstable, now create a new changelog entry
+      # that bumps the version for the next development cycle and sets the suite back to UNRELEASED
+      - name: Commit changelog suite change
+        run: |
+          cd ./package-repo
+
+          version=$(dpkg-parsechangelog --show-field Version)
 
           # bump Debian revision (last hyphen-separated field), e.g. 1.0.0-1 -> 1.0.0-2
           if [[ "$version" != *-* ]]; then
@@ -102,5 +241,47 @@ jobs:
           dch --newversion=${newversion} --distribution=UNRELEASED --controlmaint "Initial commit"
 
           git commit -a -m "Initial commit of new version ${newversion}"
-          git push origin debian/latest
-          git push origin debian/${version} 
+
+          git push origin ${{inputs.debian-branch}}
+          git push origin debian/${version}
+
+          git log --graph --oneline -n 10 --color=always
+
+  upload-to-s3:
+    needs: pkg-release
+    runs-on: 'lecore-prd-u2404-arm64-xlrg-od-ephem'
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: build/
+
+      - name: Build S3 destination environment variables
+        run: |
+          OWNER_NAME="${{ github.repository_owner }}"
+          REPO_NAME="${{ github.event.repository.name }}"
+          CATEGORY_FOLDER="${{ inputs.test-run == true && 'test' || 'proposed'}}"
+          SUITE_NAME="${{ inputs.distro-codename }}"
+          VERSION_NAME="${{ needs.pkg-release.outputs.complete_version }}"
+          WORKFLOW_BUILD_ID="${{ github.run_id }}"
+          WORKFLOW_RUN_ID="${{ github.run_attempt }}"
+
+          S3_BUCKET_PATH="${OWNER_NAME}/pkg/${CATEGORY_FOLDER}/${WORKFLOW_BUILD_ID}-${WORKFLOW_RUN_ID}/${REPO_NAME}/${SUITE_NAME}/${VERSION_NAME}/"
+
+          echo "ORG_NAME=${OWNER_NAME}"
+          echo "REPO_NAME=${REPO_NAME}"
+          echo "CATEGORY_FOLDER=${CATEGORY_FOLDER}"
+          echo "SUITE_NAME=${SUITE_NAME}"
+          echo "VERSION_NAME=${VERSION_NAME}"
+
+          echo "S3 Bucket Path: ${S3_BUCKET_PATH}"
+
+          echo "S3_BUCKET_PATH=${S3_BUCKET_PATH}" >> $GITHUB_ENV
+
+      - name: Upload released debian package to S3
+        uses: qualcomm-linux/upload-private-artifact-action@aws
+        with:
+          s3_bucket: qli-prd-lecore-gh-artifacts
+          path: build
+          destination: ${{ env.S3_BUCKET_PATH }}

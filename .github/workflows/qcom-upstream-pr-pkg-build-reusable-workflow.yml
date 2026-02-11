@@ -50,7 +50,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
 
 env:
   # For ABI checker
@@ -69,6 +68,7 @@ jobs:
         shell: bash
 
     container:
+      # This docker image is built and published by the qualcomm-linux/docker_deb_build repo CI workflow
       image: ghcr.io/qualcomm-linux/pkg-builder:${{inputs.runner == 'ubuntu-latest' && 'amd64' || 'arm64'}}-${{inputs.distro-codename}}
       options: --privileged
       credentials:
@@ -82,6 +82,11 @@ jobs:
           echo "upstream-repo : ${{inputs.upstream-repo}}"
           echo "upstream-repo-ref : ${{inputs.upstream-repo-ref}}"
           echo "pkg-repo : ${{inputs.pkg-repo}}"
+          if [[ -z "${{inputs.pkg-repo}}" ]]; then
+            echo "ERROR: inputs.pkg-repo is empty. Make sure that the caller workflow's repo has the repo variable PKG_REPO_GITHUB_NAME populated with the correct value. This variable should be in the format of owner/repo-name, for example: qualcomm-linux/pkg-repo"
+            exit 1
+          fi
+
 
       - name: Checkout qcom-build-utils
         uses: actions/checkout@v4
@@ -126,7 +131,7 @@ jobs:
           git remote add upstream-source ../upstream-repo
           git fetch upstream-source "+refs/tags/*:refs/tags/*"
 
-      - name: Merge Upstream PR Changes to Packaging Repo on top of debian/latest
+      - name: Merge Upstream PR Changes to Packaging Repo on top of debian/qcom-next
         run: |
           cd ./package-repo
 
@@ -134,7 +139,7 @@ jobs:
           git config user.email "${{vars.DEB_PKG_BOT_CI_EMAIL}}"
 
           git checkout upstream/latest
-          git checkout debian/latest
+          git checkout debian/qcom-next
           git checkout -b debian/upstream-pr
 
           version=$(dpkg-parsechangelog --show-field Version)
@@ -149,9 +154,9 @@ jobs:
           echo "upstream_version=$upstream_version" >> $GITHUB_ENV
           echo "distro_revision=$distro_revision" >> $GITHUB_ENV
 
-          # Run gbp with --no-merge, this is because we do not want gbp to perform the final merging of upstream/latest into debian/latest
+          # Run gbp with --no-merge, this is because we do not want gbp to perform the final merging of upstream/latest into debian/qcom-next
           # This because in upstream/latest, the top commit is the one of the filtering of git, github and debian folder. gbp will complain
-          # the merge is unseccessful because we want to merge with debian/latest, which has a workflow in .github, resulting in a merge conflict
+          # the merge is unseccessful because we want to merge with debian/qcom-next, which has a workflow in .github, resulting in a merge conflict
           # where in one branch we deleted .github folder, and the other we add files. We will therefore take the matter in our own hands manually after.
 
           gbp import-orig \
@@ -172,8 +177,8 @@ jobs:
           git merge \
             --allow-unrelated-histories \
             --signoff \
-            -m "Merge upstream/pr into debian/latest" \
-            -m "Filtered out .git, .github and debian from upstram, and preserved .github debian/latest" \
+            -m "Merge upstream/pr into debian/qcom-next" \
+            -m "Filtered out .git, .github and debian from upstram, and preserved .github debian/qcom-next" \
             upstream/latest
 
       - name: Promote Changelog
