@@ -29,15 +29,6 @@ on:
         description: true if this is a test run. Packages will be uploaded in test folder in S3
         type: boolean
         default: true
-        
-      runner:
-        description: The runner to use for the build
-        type: string
-        default: ubuntu-latest
-
-    secrets:
-      TOKEN:
-        required: true
 
 permissions:
   contents: read
@@ -45,7 +36,7 @@ permissions:
 jobs:
   pkg-release:
 
-    runs-on: ${{inputs.runner}}
+    runs-on: ubuntu-24.04-arm
 
     outputs:
       complete_version: ${{ steps.changelog.outputs.version }}
@@ -56,11 +47,11 @@ jobs:
 
     container:
       # This docker image is built and published by the qualcomm-linux/docker_deb_build repo CI workflow
-      image: ghcr.io/qualcomm-linux/pkg-builder:${{inputs.runner == 'ubuntu-latest' && 'amd64' || 'arm64'}}-${{inputs.distro-codename}}
+      image: ghcr.io/qualcomm-linux/pkg-builder:arm64-${{inputs.distro-codename}}
       options: --privileged
       credentials:
         username: ${{vars.DEB_PKG_BOT_CI_USERNAME}}
-        password: ${{secrets.TOKEN}}
+        password: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
 
     steps:
 
@@ -69,7 +60,6 @@ jobs:
         with:
           repository: qualcomm-linux/qcom-build-utils
           ref: ${{inputs.qcom-build-utils-ref}}
-          token: ${{secrets.TOKEN}}
           path: ./qcom-build-utils
           fetch-depth: 1
           sparse-checkout: |
@@ -79,7 +69,7 @@ jobs:
       - name: Checkout Packaging Repo
         uses: actions/checkout@v4
         with:
-          token: ${{secrets.TOKEN}}
+          token: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
           path: ./package-repo
           fetch-depth: 0
           fetch-tags: true
@@ -134,18 +124,6 @@ jobs:
 
           cd package-repo
 
-          NEAREST_UPSTREAM_BRANCH_TAG=$(git describe --tags --match 'upstream/*' --abbrev=0)
-          NEAREST_UPSTREAM_COMMIT=$(git rev-list -n 1 "$NEAREST_UPSTREAM_BRANCH_TAG")
-          NEAREST_UPSTREAM_TAG=$(git ls-remote --tags "https://github.com/${{vars.UPSTREAM_REPO_GITHUB_NAME}}.git" | \
-            awk -v commit="$NEAREST_UPSTREAM_COMMIT" '$1 == commit && $2 ~ /refs\/tags\// { sub("refs/tags/", "", $2); print $2 }' | head -n1)
-
-          # Now, translate the upstream/* tag to the upstream tag it represents in the upstream repo
-
-
-          # Get the nearest reachable debian/* tag from inputs.debian-branch.
-          # This tag represents the packaging repository state for this release.
-          PACKAGE_REPO_TAG=$(git describe --tags --match 'debian/*' --abbrev=0 ${{inputs.debian-branch}})
-
           SOURCE=$(grep-dctrl -n -s Source -r '' debian/control | head -n1)
 
           # Collect all binary package names from debian/control
@@ -160,22 +138,66 @@ jobs:
           MAIN_PKGS_JSON=$(printf '%s\n' "$MAIN_PKGS" | jq -c -R -s 'split("\n") | map(select(length>0))')
           DEV_PKGS_JSON=$(printf '%s\n' "$DEV_PKGS"  | jq -c -R -s 'split("\n") | map(select(length>0))')
 
-          #version: The complete version string for this release (e.g. 1.2.3-1)
+          # Get the nearest reachable debian/* tag from inputs.debian-branch.
+          # This tag represents the packaging repository state for this release.
+          PACKAGE_REPO_TAG=$(git describe --tags --match 'debian/*' --abbrev=0 ${{inputs.debian-branch}})
 
-          #src_repo : The upstream source repository name in github format (user/repo)
-          #src_repo_tag : The tag in the upstream source repository that was used in the last promotion (e.g. v1.2.3)
-          #src_repo_commit : The commit hash in the upstream source repository that corresponds to the src_repo_tag
-          
-          #pkg_repo : The packaging repository name in github format (user/repo)
-          #pkg_repo_tag : The tag in the packaging repository that corresponds to this release (e.g. debian/1.2.3-1)
-          #pkg_repo_commit : The commit hash in the packaging repository that corresponds to the pkg_repo_tag
-          #pkg_repo_upstream_tag : The upstream/* tag in the packaging repository that was used for this release (e.g. upstream/v1.2.3).
+          if [[ -f "upstream.conf" ]]; then
+            # ── Prebuilt binary package ──────────────────────────────────────────────
+            # No upstream git repo; source is an Artifactory binary tarball.
+            # Read Artifactory metadata from upstream.conf for provenance.
+            echo "ℹ️ upstream.conf found — generating provenance for prebuilt binary package"
+            source upstream.conf
 
-          cat > ../build/provenance.json << EOF
+            cat > ../build/provenance.json << EOF
           {
             "$SOURCE" : {
               "version": "${{ steps.changelog.outputs.version }}",
 
+              "src_type": "prebuilt-binary",
+              "src_artifactory": "$ARTIFACTORY",
+              "src_tag": "$TAG",
+              "src_distro": "$DISTRO",
+              "src_package_name": "$PACKAGE_NAME",
+
+              "pkg_repo": "${{ github.repository }}",
+              "pkg_repo_tag": "$PACKAGE_REPO_TAG",
+              "pkg_repo_commit": "$(git rev-parse HEAD)",
+
+              "packages": $MAIN_PKGS_JSON,
+              "dev-packages": $DEV_PKGS_JSON,
+
+              "build_timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+              "workflow_url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}-${{ github.run_attempt }}"
+            }
+          }
+          EOF
+
+          else
+            # ── Source package ───────────────────────────────────────────────────────
+            # Upstream is a git repository; resolve the upstream tag and commit.
+            echo "ℹ️ No upstream.conf — generating provenance for source package"
+
+            NEAREST_UPSTREAM_BRANCH_TAG=$(git describe --tags --match 'upstream/*' --abbrev=0)
+            NEAREST_UPSTREAM_COMMIT=$(git rev-list -n 1 "$NEAREST_UPSTREAM_BRANCH_TAG")
+            NEAREST_UPSTREAM_TAG=$(git ls-remote --tags "https://github.com/${{vars.UPSTREAM_REPO_GITHUB_NAME}}.git" | \
+              awk -v commit="$NEAREST_UPSTREAM_COMMIT" '$1 == commit && $2 ~ /refs\/tags\// { sub("refs/tags/", "", $2); print $2 }' | head -n1)
+
+            #version: The complete version string for this release (e.g. 1.2.3-1)
+            #src_repo : The upstream source repository name in github format (user/repo)
+            #src_repo_tag : The tag in the upstream source repository that was used in the last promotion (e.g. v1.2.3)
+            #src_repo_commit : The commit hash in the upstream source repository that corresponds to the src_repo_tag
+            #pkg_repo : The packaging repository name in github format (user/repo)
+            #pkg_repo_tag : The tag in the packaging repository that corresponds to this release (e.g. debian/1.2.3-1)
+            #pkg_repo_commit : The commit hash in the packaging repository that corresponds to the pkg_repo_tag
+            #pkg_repo_upstream_tag : The upstream/* tag in the packaging repository that was used for this release (e.g. upstream/v1.2.3).
+
+            cat > ../build/provenance.json << EOF
+          {
+            "$SOURCE" : {
+              "version": "${{ steps.changelog.outputs.version }}",
+
+              "src_type": "source",
               "src_repo": "${{vars.UPSTREAM_REPO_GITHUB_NAME}}",
               "src_repo_tag": "$NEAREST_UPSTREAM_TAG",
               "src_repo_commit": "$NEAREST_UPSTREAM_COMMIT",
@@ -188,10 +210,13 @@ jobs:
               "packages": $MAIN_PKGS_JSON,
               "dev-packages": $DEV_PKGS_JSON,
 
-              "build_timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+              "build_timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+              "workflow_url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}-${{ github.run_attempt }}"
             }
           }
           EOF
+
+          fi
 
           echo "Content of the provenance file:"
           cat ../build/provenance.json | sed 's/^/\x1b[34m/' | sed 's/$/\x1b[0m/'
@@ -203,22 +228,11 @@ jobs:
           pkg-dir: package-repo
           build-dir: build
 
-      - name: Remove files with unauthorized characters
-        run: |
-          rm build/*.build
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-artifacts
-          path: build/
-
       # After the above step that changed the changlog from UNRELEASED to unstable, now create a new changelog entry
       # that bumps the version for the next development cycle and sets the suite back to UNRELEASED
       - name: Commit changelog suite change
+        working-directory: ./package-repo
         run: |
-          cd ./package-repo
-
           version=$(dpkg-parsechangelog --show-field Version)
 
           # bump Debian revision (last hyphen-separated field), e.g. 1.0.0-1 -> 1.0.0-2
@@ -246,6 +260,26 @@ jobs:
           git push origin debian/${version}
 
           git log --graph --oneline -n 10 --color=always
+
+      - name: Prepare build logs for upload
+        working-directory: ./build/
+        run: |
+          # Remove symlink and rename timestamped .build file to its base name
+          BUILD_LINK=$(find . -maxdepth 1 -name "*.build" -type l)
+          if [ -n "$BUILD_LINK" ]; then
+            BUILD_TARGET=$(readlink "$BUILD_LINK")
+            rm "$BUILD_LINK"
+            mv "$BUILD_TARGET" "$BUILD_LINK"
+          fi
+          
+          # JFrog CLI does not allow colon characters in the properties, so we need to replace them with underscores in the build logs that are used to generate the properties for the upload step
+          sed -i 's/:/_/g' *.build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: build/
 
   upload-to-s3:
     needs: pkg-release
@@ -285,3 +319,14 @@ jobs:
           s3_bucket: qli-prd-lecore-gh-artifacts
           path: build
           destination: ${{ env.S3_BUCKET_PATH }}
+
+      - name: Notify qcom-distro-images of new release via repository dispatch
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
+          repository: qualcomm-linux/qcom-distro-images
+          event-type: pkg-repo-release
+          client-payload: >-
+            {
+              "artifact_path":"${{ env.S3_BUCKET_PATH }}"
+            }

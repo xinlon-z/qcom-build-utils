@@ -26,40 +26,31 @@ on:
       run-lintian:
         description: Run lintian or not during the build
         type: boolean
-        default: false
+        default: true
 
       run-abi-checker:
         description: Run the ABI checker or not
         type: boolean
         default: false
 
-      is-post-merge:
-        description: true if this build has been triggered by a merge into debian/qcom-next. Will ensure PR branch is deleted
-        type: boolean
-        default: false
-
-      runner:
-        description: The runner to use for the build
+      is-prebuilt:
+        description: |
+          Controls the build mode passed to the build_package action:
+            "true"  — Force prebuilt binary mode.
+            "false" — Force source build mode.
+            ""      — Auto-detect (default): prebuilt if upstream.conf exists in the repo, else source.
+          Leaving this unset is recommended for use with pkg-template so that the same workflow
+          works for both source and binary packages without modification.
         type: string
-        default: lecore-prd-u2404-arm64-xlrg-od-ephem
-        #default: ubuntu-latest
-        
-
-    secrets:
-      TOKEN:
-        required: true
+        default: ""
 
 permissions:
   contents: read
 
-env:
-  REPO_URL: https://qualcomm-linux.github.io/pkg-oss-staging-repo/
-  REPO_NAME: qualcomm-linux/pkg-oss-staging-repo
-
 jobs:
   build-debian-package:
 
-    runs-on: ${{inputs.runner}}
+    runs-on: ubuntu-24.04-arm
 
     defaults:
       run:
@@ -67,11 +58,11 @@ jobs:
 
     container:
       # This docker image is built and published by the qualcomm-linux/docker_deb_build repo CI workflow
-      image: ghcr.io/qualcomm-linux/pkg-builder:${{inputs.runner == 'ubuntu-latest' && 'amd64' || 'arm64'}}-${{inputs.distro-codename}}
+      image: ghcr.io/qualcomm-linux/pkg-builder:arm64-${{inputs.distro-codename}}
       options: --privileged
       credentials:
         username: ${{vars.DEB_PKG_BOT_CI_USERNAME}}
-        password: ${{secrets.TOKEN}}
+        password: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
 
     steps:
 
@@ -80,7 +71,7 @@ jobs:
         with:
           repository: qualcomm-linux/qcom-build-utils
           ref: ${{inputs.qcom-build-utils-ref}}
-          token: ${{secrets.TOKEN}}
+          token: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
           path: ./qcom-build-utils
           fetch-depth: 1
           sparse-checkout: |
@@ -91,7 +82,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{inputs.debian-ref}}
-          token: ${{secrets.TOKEN}}
+          token: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
           path: ./package-repo
           fetch-depth: 0 # <- Important for the tags fetching to work
           fetch-tags: true # <- Important
@@ -103,17 +94,10 @@ jobs:
           pkg-dir: package-repo
           build-dir: build-area
           run-lintian: ${{inputs.run-lintian}}
+          prebuilt: ${{inputs.is-prebuilt}}
 
       - name: Run ABI (Application Binary Interface) Check
         if: ${{inputs.run-abi-checker == true}}
         uses: ./qcom-build-utils/.github/actions/abi_checker
         with:
-          distro-codename: ${{inputs.distro-codename}}
-
-      - name: Push package to repo
-        if: ${{inputs.is-post-merge == true}}
-        uses: ./qcom-build-utils/.github/actions/push_to_repo
-        with:
-          distro-codename: ${{inputs.distro-codename}}
-          force-override: false
-          token: ${{secrets.TOKEN}}
+          apt-repository: "deb [arch=arm64 trusted=yes] https://qartifactory-edge.qualcomm.com/artifactory/qsc-deb-releases ${{inputs.distro-codename}} main"

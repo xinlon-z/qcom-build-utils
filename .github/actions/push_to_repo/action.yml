@@ -31,7 +31,28 @@ runs:
       run: |
         changes_file=$(find ./build-area -maxdepth 1 -name '*.changes' | head -n 1)
         
-        main_binary=$(grep '^Binary:' "$changes_file" | sed 's/^Binary: //' | tr ' ' '\n' | grep -v -- '-dev' | head -n 1)
+        echo "Found changes file : $changes_file"
+
+        cat "$changes_file"
+
+        # This line extracts the primary binary name from a changes file through a series of text processing steps:
+        # 1. grep '^Binary:' - Searches for lines starting with "Binary:"
+        # 2. sed 's/^Binary: //' - Removes the "Binary: " prefix from matched lines
+        # 3. tr ' ' '\n' - Converts spaces to newlines (splits binary names into separate lines)
+        # 4. grep -v -- '-dev' - Filters out any development packages (lines containing "-dev")
+        # 5. head -n 1 - Selects the first remaining binary name
+        # Result is stored in the main_binary variable for later use
+        # If no non-dev package exists, fall back to the first package (including -dev)
+
+        echo "Extracting the main binary name from the changes file"
+        main_binary=$(grep '^Binary:' "$changes_file" | sed 's/^Binary: //' | tr ' ' '\n' | grep -v -- '-dev' || true)
+        echo "Main binary name extracted (excluding -dev packages) : $main_binary"
+        
+        if [ -z "$main_binary" ]; then
+          echo "No non-dev package found, falling back to the first package (including -dev)"
+          main_binary=$(grep '^Binary:' "$changes_file" | sed 's/^Binary: //' | tr ' ' '\n' | head -n 1)
+        fi
+
         version=$(grep '^Version:' "$changes_file" | sed 's/^Version: //')
         
         echo "BUILT_PACKAGE_NAME=$main_binary" >> $GITHUB_ENV

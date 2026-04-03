@@ -208,6 +208,8 @@ _seed_to_debootstrap_include() {
         passwd
         systemd-sysv
         apt
+        grub-common
+        grub2-common
     )
 
     for p in "${required_pkgs[@]}"; do
@@ -253,6 +255,28 @@ image_preprocessing() {
             exit 1
         }
     fi
+
+
+    # Update debootstrap for resolute distro, latest tag: 1.0.142
+    if [[ "${CODENAME}" = "resolute" ]]; then
+        echo "[INFO][preprocess] Updating debootstrap to support resolute distro (v1.0.142)..."
+        DEBOOTSTRAP_TMP=$(mktemp -d)
+        git clone --branch 1.0.142 --depth 1 \
+            https://salsa.debian.org/installer-team/debootstrap.git \
+            "$DEBOOTSTRAP_TMP/debootstrap" || {
+            echo "[ERROR][preprocess] Failed to clone debootstrap repository."
+            rm -rf "$DEBOOTSTRAP_TMP"
+            exit 1
+        }
+        (cd "$DEBOOTSTRAP_TMP/debootstrap" && make install) || {
+            echo "[ERROR][preprocess] Failed to install debootstrap."
+            rm -rf "$DEBOOTSTRAP_TMP"
+            exit 1
+        }
+        rm -rf "$DEBOOTSTRAP_TMP"
+        echo "[INFO][preprocess] debootstrap version: $(debootstrap --version)"
+    fi
+
 
     # NOTE: ARM64-only assumption: host is arm64 and target ARCH is arm64.
     if [[ "${ARCH}" != "arm64" ]]; then
@@ -436,6 +460,39 @@ mount -o bind /dev "$ROOTFS_DIR/dev"
 mount --bind /dev/pts "$ROOTFS_DIR/dev/pts"
 
 # ==============================================================================
+# Step 7.5: Configure GRUB defaults
+# ==============================================================================
+echo "[INFO] Configuring /etc/default/grub..."
+
+# Ensure target directories exist before writing configuration
+mkdir -p "$ROOTFS_DIR/boot/grub"
+mkdir -p "$ROOTFS_DIR/etc/default"
+
+# Write GRUB defaults using quoted heredoc to prevent host-side expansion
+cat <<'EOF' > "$ROOTFS_DIR/etc/default/grub"
+GRUB_DEFAULT=0
+GRUB_TIMEOUT=5
+GRUB_DISTRIBUTOR=`lsb_release -i -s 2> /dev/null || echo Debian`
+
+# --- DUAL OUTPUT CONFIGURATION ---
+# "serial"  -> Outputs menu to the serial port
+# "console" -> Outputs menu to the attached display (HDMI/DP) in text mode
+GRUB_TERMINAL="serial console"
+GRUB_SERIAL_COMMAND="serial --speed=115200 --unit=0 --word=8 --parity=no --stop=1"
+
+# Kernel parameters applied to BOTH Normal and Recovery boot modes
+# (Critical hardware settings: console, rootfs, clocks, EFI)
+GRUB_CMDLINE_LINUX="earlycon console=ttyMSM0,115200n8 root=LABEL=system cma=128M rw clk_ignore_unused pd_ignore_unused rootwait ignore_loglevel"
+
+# Kernel parameters applied ONLY to Normal boot mode
+# (UX settings: quiet, splash, etc. - Left empty for verbose output)
+GRUB_CMDLINE_LINUX_DEFAULT=""
+
+# Disable UUIDs to support generic filesystem images
+GRUB_DISABLE_LINUX_UUID=true
+EOF
+
+# ==============================================================================
 # Step 8: Enter chroot to Install Packages and Configure GRUB
 # ==============================================================================
 
@@ -516,22 +573,45 @@ rm -f /tmp/\${CODENAME}_post.manifest /tmp/sorted_base.manifest /tmp/sorted_post
 echo '[CHROOT] Base package list preserved as /tmp/\${CODENAME}_base.manifest'
 echo '[CHROOT] Custom installed packages saved to /tmp/packages_\${DATE}.manifest'
 
-echo '[CHROOT] Detecting installed kernel version...'
+# ==============================================================================
+# GRUB Configuration Cleanup & Standardization
+# ==============================================================================
 
-kernel_ver=$(basename "$KERNEL_DEB" \
-  | sed 's|^linux-kernel-\(.*\)-arm64\.deb$|\1|' \
-  | sed 's|-[0-9][0-9]*-[0-9][0-9]*$||')
+# 1. Enforce Generic Partition Search
+# Replace host-detected UUIDs with stable Label searching to ensure
+# the image boots on any storage medium.
+sed -i 's/search --no-floppy --fs-uuid --set=root .*/search --no-floppy --label system --set=root/g' /boot/grub/grub.cfg
 
-echo '[CHROOT] Writing GRUB configuration for single DTB-agnostic entry...'
-tee /boot/grub.cfg > /dev/null <<GRUBCFG
-set timeout=5
+# 2. Clean Kernel Command Line
+# Remove the host-detected root device (e.g., root=/dev/nvme0n1p1) to prevent
+# conflicts with our 'root=LABEL=system' argument.
+sed -i 's/root=\/dev\/[^ ]* //g' /boot/grub/grub.cfg
 
-menuentry \"\${DISTRO} \${CODENAME}\" {
-    search --no-floppy --label system --set=root
-    linux /boot/vmlinuz-\$kernel_ver earlycon console=ttyMSM0,115200n8 root=LABEL=system cma=128M rw clk_ignore_unused pd_ignore_unused efi=noruntime rootwait ignore_loglevel
-    initrd /boot/initrd.img-\$kernel_ver
-}
-GRUBCFG
+# ==============================================================================
+# Device Tree Configuration for Debian platforms
+# ==============================================================================
+
+if [ \"\${distro_lc}\" = \"debian\" ]; then
+    echo '[INFO][CHROOT] Debian target detected. Configuring platform Device Tree...'
+
+    # Locate the platform Device Tree Blob (DTB) in standard library or firmware paths
+    DTB_PATH=\$(find /usr/lib /lib/firmware -name \"glymur-crd.dtb\" -print -quit)
+
+    if [ -n \"\$DTB_PATH\" ]; then
+        echo \"[INFO][CHROOT] Platform DTB resolved: \$DTB_PATH\"
+        
+        # Ensure DTB is accessible in the bootloader's filesystem scope
+        ln -sf \"\$DTB_PATH\" /boot/dtb
+        
+        # Inject the devicetree directive into the generated GRUB configuration.
+        # This appends the command immediately following the 'initrd' load.
+        sed -i \"/^[[:space:]]*initrd/a \    devicetree /boot/dtb\" /boot/grub/grub.cfg
+        
+        echo '[SUCCESS][CHROOT] Device Tree directive injected into /boot/grub/grub.cfg'
+    else
+        echo '[WARN][CHROOT] Target DTB (glymur-crd.dtb) not found. Skipping injection.'
+    fi
+fi
 "
 
 # ==============================================================================

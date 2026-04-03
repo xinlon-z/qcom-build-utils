@@ -31,10 +31,6 @@ on:
         type: string
         required: true
 
-    secrets:
-      TOKEN:
-        required: true
-
 permissions:
   contents: write
 
@@ -47,7 +43,7 @@ env:
 jobs:
   promote-upstream-version:
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
 
     defaults:
       run:
@@ -55,10 +51,10 @@ jobs:
 
     container:
       # This docker image is built and published by the qualcomm-linux/docker_deb_build repo CI workflow
-      image: ghcr.io/qualcomm-linux/pkg-builder:amd64-noble
+      image: ghcr.io/qualcomm-linux/pkg-builder:arm64-noble
       credentials:
         username: ${{ vars.DEB_PKG_BOT_CI_USERNAME }}
-        password: ${{ secrets.TOKEN }}
+        password: ${{ secrets.DEB_PKG_BOT_CI_TOKEN }}
 
     steps:
 
@@ -88,7 +84,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          token: ${{secrets.TOKEN}}
+          token: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
           path: ./package-repo
           fetch-depth: 0
 
@@ -142,7 +138,7 @@ jobs:
           echo "ℹ️ This is likely a second attempt to promote the same upstream tag, where the first attempt already added the upstream tag in the upstram branch"
 
           # Check if there is a PR open for this already
-          gh auth login --with-token <<< "${{secrets.TOKEN}}"
+          gh auth login --with-token <<< "${{secrets.DEB_PKG_BOT_CI_TOKEN}}"
           PRS=$(gh pr list --head "debian/pr/${{env.NORMALIZED_VERSION}}-1" --state open --json number --jq '.[].number')
           if [ -n "$PRS" ]; then
             echo "❌ An open PR already exists for this promotion attempt: $PRS"
@@ -169,7 +165,7 @@ jobs:
       - name: Add Upstream Link As A Remote And Fetch Tags
         run: |
           cd ./package-repo
-          git remote add upstream-source https://x-access-token:${{secrets.TOKEN}}@github.com/${{inputs.upstream-repo}}.git
+          git remote add upstream-source https://x-access-token:${{secrets.DEB_PKG_BOT_CI_TOKEN}}@github.com/${{inputs.upstream-repo}}.git
           git fetch upstream-source "+refs/tags/*:refs/tags/*"
 
       - name: Ensure the tag exists in the upstream repo
@@ -246,7 +242,7 @@ jobs:
         run: |
           cd ./package-repo
 
-          gh auth login --with-token <<< "${{secrets.TOKEN}}"
+          gh auth login --with-token <<< "${{secrets.DEB_PKG_BOT_CI_TOKEN}}"
 
           ../qcom-build-utils/scripts/create_promotion_pr.py \
             --base-branch "${{inputs.debian-branch}}" \
