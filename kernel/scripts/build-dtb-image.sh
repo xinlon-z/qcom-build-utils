@@ -162,6 +162,7 @@ LOOP_DEV=""            # Loop device used for the FAT image
 BUILD_FIT_DTB=0
 FIT_WORK_DIR=""        # Temporary working directory for FIT build artefacts
 METADATA_COMMIT="5d24fea316a512f85acf7a4528a118ce52223530" # Default pinned commit for qcom-dtb-metadata.
+DEFAULT_ITS_FILE="qcom-next-fitimage.its" # Set default ITS file.
 
 # ---------------------------- Helper Functions -------------------------------
 
@@ -520,12 +521,9 @@ else
     # -----------------------------------------------------------------------
     # Step 5. Prepare debug ITS and generate qclinux_fit.img via mkimage
     # -----------------------------------------------------------------------
-    ITS_FILE="${DTB_METADATA_DIR}/qcom-fitimage.its"
-    ITS_BASENAME="$(basename "${ITS_FILE}")"
-    ITS_STAGE_FILE="${FIT_STAGE}/${ITS_BASENAME}"
-    ITS_DBG="${FIT_STAGE}/${ITS_BASENAME%.its}_dbg.its"
-    cp "${ITS_FILE}" "${ITS_DBG}"
-    cp "${ITS_FILE}" "${ITS_STAGE_FILE}"
+    ITS_FILE_PATH="${DTB_METADATA_DIR}/${DEFAULT_ITS_FILE}"
+    ITS_STAGE_FILE="${FIT_STAGE}/${DEFAULT_ITS_FILE}"
+    cp "${ITS_FILE_PATH}" "${ITS_STAGE_FILE}"
 
     # Generate qclinux_fit.img via mkimage
     # Output filename MUST be qclinux_fit.img – hardcoded in UEFI:
