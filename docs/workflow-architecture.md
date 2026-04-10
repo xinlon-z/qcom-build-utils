@@ -216,7 +216,7 @@ sequenceDiagram
 **Workflow Configuration** (in pkg-*/. github/workflows/pre-merge.yml):
 ```yaml
 on:
-  pull_request_target:
+  pull_request:
     branches: [ debian/qcom-next ]
 
 jobs:
@@ -373,14 +373,13 @@ flowchart LR
 1. **Centralization**: Workflow logic is centralized in qcom-build-utils to ensure consistency
 2. **Reusability**: Package repositories only need minimal workflow callers
 3. **Flexibility**: Workflows support various configurations through input parameters
-4. **Security**: Uses organization secrets and restricted permissions
+4. **Security**: Uses `GITHUB_TOKEN` (no long-lived PAT secrets needed for standard builds); restricted permissions per workflow
 5. **Isolation**: Each package repository is independent
 6. **Automation**: Automated building, testing, versioning, and publishing
 
 ## Security Considerations
 
-- Workflows use `pull_request_target` for secure PR builds
-- Container credentials stored as organization secrets
-- Repository access controlled via GitHub PAT tokens
+- Workflows use `on: pull_request` (not `pull_request_target`) to prevent remote code execution (RCE): PR workflows run in the context of the PR branch with restricted permissions, so repository secrets are never exposed to untrusted code from public forks
+- Container registry access uses `GITHUB_TOKEN` instead of a long-lived PAT
 - ABI checking prevents accidental API/ABI breakage
 - CodeQL and security scanning via qcom-preflight-checks

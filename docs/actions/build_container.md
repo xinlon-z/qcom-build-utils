@@ -102,8 +102,6 @@ This ensures published containers are functional.
   with:
     arch: arm64
     push-to-ghcr: true
-    token: ${{ secrets.DEB_PKG_BOT_CI_TOKEN }}
-    username: ${{ vars.DEB_PKG_BOT_CI_USERNAME }}
 ```
 
 ## Notes

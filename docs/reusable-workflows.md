@@ -54,12 +54,6 @@ flowchart TD
 | `is-post-merge` | boolean | No | `false` | True if triggered by merge to debian/qcom-next |
 | `runner` | string | No | `lecore-prd-u2404-arm64-xlrg-od-ephem` | GitHub runner to use |
 
-### Secrets
-
-| Secret | Description |
-|--------|-------------|
-| `TOKEN` | GitHub PAT token for authentication |
-
 ### Environment Variables
 
 - `REPO_URL`: `https://qualcomm-linux.github.io/pkg-oss-staging-repo/`
@@ -88,8 +82,6 @@ jobs:
       run-abi-checker: true
       push-to-repo: false
       is-post-merge: false
-    secrets:
-      TOKEN: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
 ```
 
 #### Post-merge Build and Publish
@@ -104,8 +96,6 @@ jobs:
       push-to-repo: true
       run-abi-checker: true
       is-post-merge: true
-    secrets:
-      TOKEN: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
 ```
 
 ---
@@ -154,14 +144,13 @@ flowchart TD
 
 ### Secrets
 
-| Secret | Description |
-|--------|-------------|
-| `TOKEN` | GitHub PAT token for authentication |
+| Secret | Required | Description |
+|--------|----------|-------------|
+| `PAT` | No | GitHub Personal Access Token for authenticating against **private** upstream repositories. Not required when the upstream repository is public. |
 
 ### Environment Variables
 
 - `NORMALIZED_VERSION`: Version with 'v' prefix removed
-- `DISTRIBUTION`: Target distribution (default: `noble`)
 
 ### Workflow Steps
 
@@ -187,8 +176,6 @@ jobs:
       upstream-tag: v2.1.0
       upstream-repo: qualcomm-linux/my-upstream-project
       promote-changelog: true
-    secrets:
-      TOKEN: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
 ```
 
 ### Notes
@@ -240,12 +227,6 @@ flowchart TD
 | `distro-codename` | string | No | `noble` | Distribution codename |
 | `runner` | string | No | `ubuntu-latest` | Runner to use |
 
-### Secrets
-
-| Secret | Description |
-|--------|-------------|
-| `TOKEN` | GitHub PAT token for authentication |
-
 ### Environment Variables
 
 - `REPO_URL`: APT repository URL for ABI checking
@@ -273,7 +254,7 @@ Called from upstream repository's workflow (e.g., `.github/workflows/pkg-build-p
 name: Package Build PR Check
 
 on:
-  pull_request_target:
+  pull_request:
     branches: [ main ]
 
 jobs:
@@ -285,8 +266,6 @@ jobs:
       upstream-repo-ref: ${{github.head_ref}}
       pkg-repo: ${{vars.PKG_REPO_GITHUB_NAME}}
       pr-number: ${{github.event.pull_request.number}}
-    secrets:
-      TOKEN: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
 ```
 
 **Setup Requirements**:
@@ -473,16 +452,13 @@ jobs:
       # Input parameters
       qcom-build-utils-ref: development
       # ... other inputs
-    secrets:
-      TOKEN: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
 ```
 
 ### Required Organization Secrets
 
 Package repositories need these organization secrets configured:
 
-- `DEB_PKG_BOT_CI_TOKEN` - GitHub PAT for authentication
-- `SEMGREP_APP_TOKEN` - For security scanning
+- `SEMGREP_APP_TOKEN` - For security scanning (used by qcom-preflight-checks)
 
 ### Required Organization Variables
 
