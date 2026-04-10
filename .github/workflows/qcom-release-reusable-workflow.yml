@@ -32,6 +32,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   pkg-release:
@@ -47,11 +48,11 @@ jobs:
 
     container:
       # This docker image is built and published by the qualcomm-linux/docker_deb_build repo CI workflow
-      image: ghcr.io/qualcomm-linux/pkg-builder:arm64-${{inputs.distro-codename}}
+      image: ghcr.io/qualcomm-linux/pkg-builder:${{inputs.distro-codename}}
       options: --privileged
       credentials:
-        username: ${{vars.DEB_PKG_BOT_CI_USERNAME}}
-        password: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
 
@@ -69,7 +70,6 @@ jobs:
       - name: Checkout Packaging Repo
         uses: actions/checkout@v4
         with:
-          token: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
           path: ./package-repo
           fetch-depth: 0
           fetch-tags: true
@@ -323,7 +323,7 @@ jobs:
       - name: Notify qcom-distro-images of new release via repository dispatch
         uses: peter-evans/repository-dispatch@v3
         with:
-          token: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
+          token: ${{secrets.GITHUB_TOKEN}}
           repository: qualcomm-linux/qcom-distro-images
           event-type: pkg-repo-release
           client-payload: >-

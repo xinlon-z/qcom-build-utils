@@ -31,13 +31,17 @@ on:
         type: string
         required: true
 
+    secrets:
+      PAT:
+        required: false
+
 permissions:
   contents: write
+  packages: read
+  pull-requests: write
 
 env:
   NORMALIZED_VERSION: ""
-  DISTRIBUTION: noble
-
   UPSTREAM_TAG_ALREADY_EXISTS: false
 
 jobs:
@@ -50,11 +54,11 @@ jobs:
         shell: bash
 
     container:
-      # This docker image is built and published by the qualcomm-linux/docker_deb_build repo CI workflow
-      image: ghcr.io/qualcomm-linux/pkg-builder:arm64-noble
+      # This docker image is built and published by the qualcomm-linux/docker-pkg-build repo CI workflow
+      image: ghcr.io/qualcomm-linux/pkg-builder:noble
       credentials:
-        username: ${{ vars.DEB_PKG_BOT_CI_USERNAME }}
-        password: ${{ secrets.DEB_PKG_BOT_CI_TOKEN }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
 
@@ -73,7 +77,6 @@ jobs:
         with:
           repository: qualcomm-linux/qcom-build-utils
           ref: ${{inputs.qcom-build-utils-ref}}
-          #token: Not needed for public repo
           path: ./qcom-build-utils
           fetch-depth: 1
           sparse-checkout: |
@@ -84,14 +87,17 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          token: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
+          token: ${{secrets.PAT}}
           path: ./package-repo
           fetch-depth: 0
 
-      - name: Show branches/tags and checkout debian/upstream latest
-        run: |
-          cd ./package-repo
+      - name: Authenticate with GitHub
+        run : |
+          gh auth login --with-token <<< "${{secrets.PAT}}"
 
+      - name: Show branches/tags and checkout debian/upstream latest
+        working-directory: ./package-repo
+        run: |
           git branch
           git tag
           git checkout ${{inputs.debian-branch}}
@@ -102,20 +108,17 @@ jobs:
             git checkout - # Then revert back to the inputs.debian-branch branch as we will need to have it checked out for gbp later
           fi
 
-
       - name: Make sure the upstream tag is not already part of the repo
+        working-directory: ./package-repo
         run: |
-          cd ./package-repo
-
           if (git tag --list | grep "${{inputs.upstream-tag}}"); then
             echo "❌ The supplied upstream tag is wrong as it pertains to this repo already."
             exit 1
           fi
 
       - name: Validate the upstream tag promotion state
+        working-directory: ./package-repo
         run: |
-          cd ./package-repo
-
           # Check if the upstream/<normalized_version> tag does not already exists
           if ! git tag --list | grep "upstream/${{env.NORMALIZED_VERSION}}"; then
             echo "✅ The upstream tag '${{inputs.upstream-tag}}' has not been promoted yet. Continuing."
@@ -138,7 +141,6 @@ jobs:
           echo "ℹ️ This is likely a second attempt to promote the same upstream tag, where the first attempt already added the upstream tag in the upstram branch"
 
           # Check if there is a PR open for this already
-          gh auth login --with-token <<< "${{secrets.DEB_PKG_BOT_CI_TOKEN}}"
           PRS=$(gh pr list --head "debian/pr/${{env.NORMALIZED_VERSION}}-1" --state open --json number --jq '.[].number')
           if [ -n "$PRS" ]; then
             echo "❌ An open PR already exists for this promotion attempt: $PRS"
@@ -163,20 +165,43 @@ jobs:
           fi
 
       - name: Add Upstream Link As A Remote And Fetch Tags
+        working-directory: ./package-repo
         run: |
-          cd ./package-repo
-          git remote add upstream-source https://x-access-token:${{secrets.DEB_PKG_BOT_CI_TOKEN}}@github.com/${{inputs.upstream-repo}}.git
-          git fetch upstream-source "+refs/tags/*:refs/tags/*"
+          if [ -n "${{secrets.PAT}}" ]; then
+            echo "ℹ️ Adding upstream remote with token authentication. This is because the upstream repository may be private and require authentication to fetch tags."
+            REPO_URL=https://x-access-token:${{secrets.PAT}}@github.com/${{inputs.upstream-repo}}.git
+          else
+            echo "ℹ️ Adding upstream remote without token authentication, repo is assumed to be public"
+            REPO_URL=https://github.com/${{inputs.upstream-repo}}.git
+          fi
+
+          git remote add upstream-source $REPO_URL
+
+          echo "ℹ️ Fetching tags from upstream repository using token authentication."
+
+          # Override the global extraheader set by actions/checkout (GITHUB_TOKEN) which would otherwise
+          # take precedence over the credentials embedded in the URL and prevent access to external repos.
+          if ! git fetch upstream-source "+refs/tags/*:refs/tags/*"; then
+            echo "❌ Failed to fetch tags from '${{inputs.upstream-repo}}'."
+
+            if [ -n "${{secrets.PAT}}" ]; then
+              echo "❌ Ensure that the PAT token has the  permission on the repository."
+              echo "❌ For more information about this token, see the README.md in qcom-build-utils repo."
+            else
+              echo "❌ Make sure the upstream repository is public or if it is private that the PAT token is set and has the necessary permissions."
+            fi
+
+            exit 1
+          fi
 
       - name: Ensure the tag exists in the upstream repo
+        working-directory: ./package-repo
         run: |
-          cd ./package-repo
-
           if ! git rev-parse --verify "refs/tags/${{inputs.upstream-tag}}" >/dev/null 2>&1; then
             echo "❌ The specified upstream tag '${{inputs.upstream-tag}}' does not exist in the upstream repository."
             exit 1
           fi
-          
+
       - name: Pre-populate the upstream/latest branch if first promotion
         run: |
           cd ./package-repo
@@ -193,9 +218,8 @@ jobs:
           fi
 
       - name: Merge upstream tag into packaging branch
+        working-directory: ./package-repo
         run: |
-          cd ./package-repo
-
           git config user.name "${{vars.DEB_PKG_BOT_CI_NAME}}"
           git config user.email "${{vars.DEB_PKG_BOT_CI_EMAIL}}"
 
@@ -206,9 +230,8 @@ jobs:
           ../qcom-build-utils/scripts/merge_debian_packaging_upstream ${{inputs.upstream-tag}}
 
       - name: Promote Changelog
+        working-directory: ./package-repo
         run: |
-          cd ./package-repo
-
           export DEBFULLNAME="${{vars.DEB_PKG_BOT_CI_NAME}}"
           export DEBEMAIL="${{vars.DEB_PKG_BOT_CI_EMAIL}}"
 
@@ -221,9 +244,8 @@ jobs:
           git commit -a -s -m "Update changelog version to ${{env.NORMALIZED_VERSION}}-1 and UNRELEASED suite"
 
       - name: Push Upstream/latest and debian PR Branch
+        working-directory: ./package-repo
         run: |
-          cd ./package-repo
-
           if [ "${{env.UPSTREAM_TAG_ALREADY_EXISTS}}" = "false" ]; then
               # This is the happy path where no previous promotion attempt was detected
 
@@ -239,11 +261,8 @@ jobs:
           git push origin debian/pr/${{env.NORMALIZED_VERSION}}-1
 
       - name: Open Promotion PR
+        working-directory: ./package-repo
         run: |
-          cd ./package-repo
-
-          gh auth login --with-token <<< "${{secrets.DEB_PKG_BOT_CI_TOKEN}}"
-
           ../qcom-build-utils/scripts/create_promotion_pr.py \
             --base-branch "${{inputs.debian-branch}}" \
             --upstream-tag "${{inputs.upstream-tag}}" \

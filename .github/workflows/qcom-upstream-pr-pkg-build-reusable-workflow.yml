@@ -41,6 +41,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 env:
   # For ABI checker
@@ -60,11 +61,11 @@ jobs:
 
     container:
       # This docker image is built and published by the qualcomm-linux/docker_deb_build repo CI workflow
-      image: ghcr.io/qualcomm-linux/pkg-builder:arm64-${{inputs.distro-codename}}
+      image: ghcr.io/qualcomm-linux/pkg-builder:${{inputs.distro-codename}}
       options: --privileged
       credentials:
-        username: ${{vars.DEB_PKG_BOT_CI_USERNAME}}
-        password: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
 
@@ -84,7 +85,6 @@ jobs:
         with:
           repository: qualcomm-linux/qcom-build-utils
           ref: ${{inputs.qcom-build-utils-ref}}
-          token: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
           path: ./qcom-build-utils
           fetch-depth: 1
           sparse-checkout: |
