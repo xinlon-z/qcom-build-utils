@@ -30,6 +30,11 @@ on:
         type: boolean
         default: true
 
+    secrets:
+      PAT:
+        description: Personal Access Token with repo and package permissions to the packaging repository. This is needed to push the changelog commit and tag to the packaging repository.
+        required: false
+
 permissions:
   contents: read
   packages: read
@@ -70,6 +75,7 @@ jobs:
       - name: Checkout Packaging Repo
         uses: actions/checkout@v5
         with:
+          token: ${{secrets.PAT}}
           path: ./package-repo
           fetch-depth: 0
           fetch-tags: true
@@ -117,7 +123,6 @@ jobs:
 
           git log --graph --oneline -n 10 --color=always
 
-      #TODO pkg_repo_branch needs to be dynamic based on the branch used to call the workflow
       - name: Create provenance file
         run: |
           mkdir build
