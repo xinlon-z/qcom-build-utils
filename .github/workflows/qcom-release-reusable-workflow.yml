@@ -328,7 +328,7 @@ jobs:
       - name: Notify qcom-distro-images of new release via repository dispatch
         uses: peter-evans/repository-dispatch@v3
         with:
-          token: ${{secrets.GITHUB_TOKEN}}
+          token: ${{secrets.PAT}}
           repository: qualcomm-linux/qcom-distro-images
           event-type: pkg-repo-release
           client-payload: >-
