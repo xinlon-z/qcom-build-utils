@@ -102,7 +102,7 @@ runs:
 
     - name: Checkout Staging Repo
       if: steps.check-version.outputs.do_upload == 'true'
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
         repository: ${{env.REPO_NAME}}
         ref: main

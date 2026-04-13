@@ -72,7 +72,7 @@ jobs:
     steps:
 
       - name: Checkout qcom-build-utils
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: qualcomm-linux/qcom-build-utils
           ref: ${{inputs.qcom-build-utils-ref}}
@@ -83,7 +83,7 @@ jobs:
             scripts
 
       - name: Checkout Packaging Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: ./package-repo
           fetch-depth: 0

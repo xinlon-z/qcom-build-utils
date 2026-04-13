@@ -73,7 +73,7 @@ jobs:
           echo "ℹ️ Normalized version : $NORMALIZED_VERSION"
 
       - name: Checkout qcom-build-utils
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: qualcomm-linux/qcom-build-utils
           ref: ${{inputs.qcom-build-utils-ref}}
@@ -85,7 +85,7 @@ jobs:
 
       # Fetch all history for all tags and branches
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           token: ${{secrets.PAT}}
           path: ./package-repo
