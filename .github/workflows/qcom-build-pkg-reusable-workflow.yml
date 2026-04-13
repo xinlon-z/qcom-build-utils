@@ -46,6 +46,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   build-debian-package:
@@ -58,20 +59,19 @@ jobs:
 
     container:
       # This docker image is built and published by the qualcomm-linux/docker_deb_build repo CI workflow
-      image: ghcr.io/qualcomm-linux/pkg-builder:arm64-${{inputs.distro-codename}}
+      image: ghcr.io/qualcomm-linux/pkg-builder:${{inputs.distro-codename}}
       options: --privileged
       credentials:
-        username: ${{vars.DEB_PKG_BOT_CI_USERNAME}}
-        password: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
 
       - name: Checkout qcom-build-utils
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: qualcomm-linux/qcom-build-utils
           ref: ${{inputs.qcom-build-utils-ref}}
-          token: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
           path: ./qcom-build-utils
           fetch-depth: 1
           sparse-checkout: |
@@ -79,10 +79,9 @@ jobs:
             scripts
 
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{inputs.debian-ref}}
-          token: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
           path: ./package-repo
           fetch-depth: 0 # <- Important for the tags fetching to work
           fetch-tags: true # <- Important

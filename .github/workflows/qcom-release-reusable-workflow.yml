@@ -30,8 +30,14 @@ on:
         type: boolean
         default: true
 
+    secrets:
+      PAT:
+        description: Personal Access Token with repo and package permissions to the packaging repository. This is needed to push the changelog commit and tag to the packaging repository.
+        required: false
+
 permissions:
   contents: read
+  packages: read
 
 jobs:
   pkg-release:
@@ -47,16 +53,16 @@ jobs:
 
     container:
       # This docker image is built and published by the qualcomm-linux/docker_deb_build repo CI workflow
-      image: ghcr.io/qualcomm-linux/pkg-builder:arm64-${{inputs.distro-codename}}
+      image: ghcr.io/qualcomm-linux/pkg-builder:${{inputs.distro-codename}}
       options: --privileged
       credentials:
-        username: ${{vars.DEB_PKG_BOT_CI_USERNAME}}
-        password: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
 
       - name: Checkout qcom-build-utils
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: qualcomm-linux/qcom-build-utils
           ref: ${{inputs.qcom-build-utils-ref}}
@@ -67,9 +73,9 @@ jobs:
             scripts
 
       - name: Checkout Packaging Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
-          token: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
+          token: ${{secrets.PAT}}
           path: ./package-repo
           fetch-depth: 0
           fetch-tags: true
@@ -117,7 +123,6 @@ jobs:
 
           git log --graph --oneline -n 10 --color=always
 
-      #TODO pkg_repo_branch needs to be dynamic based on the branch used to call the workflow
       - name: Create provenance file
         run: |
           mkdir build
@@ -276,7 +281,7 @@ jobs:
           sed -i 's/:/_/g' *.build
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: build-artifacts
           path: build/
@@ -286,7 +291,7 @@ jobs:
     runs-on: 'lecore-prd-u2404-arm64-xlrg-od-ephem'
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: build-artifacts
           path: build/
@@ -323,7 +328,7 @@ jobs:
       - name: Notify qcom-distro-images of new release via repository dispatch
         uses: peter-evans/repository-dispatch@v3
         with:
-          token: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
+          token: ${{secrets.PAT}}
           repository: qualcomm-linux/qcom-distro-images
           event-type: pkg-repo-release
           client-payload: >-

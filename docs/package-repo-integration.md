@@ -111,7 +111,6 @@ If you prefer to set up a repository manually instead of using the template:
    - Require branches to be up to date
 
 3. **Configure organization secrets** (already set at org level):
-   - `DEB_PKG_BOT_CI_TOKEN` - GitHub PAT
    - `SEMGREP_APP_TOKEN` - For security scanning
 
 4. **Configure organization variables** (already set at org level):
@@ -200,11 +199,9 @@ Create the minimal workflow files that call qcom-build-utils reusable workflows.
 
 ```yaml
 name: Pre-Merge
-description: |
-  Tests that with this PR, the package builds successfully.
 
 on:
-  pull_request_target:
+  pull_request:
     branches: [ debian/qcom-next ]
 
 permissions:
@@ -220,9 +217,6 @@ jobs:
       run-abi-checker: true
       push-to-repo: false
       is-post-merge: false
-
-    secrets:
-      TOKEN: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
 ```
 
 #### .github/workflows/post-merge.yml
@@ -249,9 +243,6 @@ jobs:
       push-to-repo: true
       run-abi-checker: true
       is-post-merge: true
-
-    secrets:
-      TOKEN: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
 ```
 
 #### Step 4: Initial Commit
@@ -412,8 +403,6 @@ jobs:
       upstream-tag: ${{ github.event.inputs.upstream-tag }}
       upstream-repo: ${{ github.event.inputs.upstream-repo }}
       promote-changelog: true
-    secrets:
-      TOKEN: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
 ```
 
 #### Triggering Upstream Promotion
@@ -476,7 +465,7 @@ graph TB
 name: Package Build PR Check
 
 on:
-  pull_request_target:
+  pull_request:
     branches: [ main ]
 
 permissions:
@@ -492,8 +481,6 @@ jobs:
       upstream-repo-ref: ${{github.head_ref}}         # PR branch
       pkg-repo: ${{vars.PKG_REPO_GITHUB_NAME}}        # Links to package repo via variable
       pr-number: ${{github.event.pull_request.number}}
-    secrets:
-      TOKEN: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
 ```
 
 **How the variable works**:

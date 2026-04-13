@@ -50,6 +50,7 @@ on:
 
 permissions:
   contents: write
+  packages: read
   pull-requests: write
 
 jobs:
@@ -63,15 +64,15 @@ jobs:
 
     container:
       # This docker image is built and published by the qualcomm-linux/docker_deb_build repo CI workflow
-      image: ghcr.io/qualcomm-linux/pkg-builder:arm64-noble
+      image: ghcr.io/qualcomm-linux/pkg-builder:noble
       credentials:
-        username: ${{ vars.DEB_PKG_BOT_CI_USERNAME }}
-        password: ${{ secrets.DEB_PKG_BOT_CI_TOKEN }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
 
       - name: Checkout qcom-build-utils
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: qualcomm-linux/qcom-build-utils
           ref: ${{inputs.qcom-build-utils-ref}}
@@ -82,9 +83,8 @@ jobs:
             scripts
 
       - name: Checkout Packaging Repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
-          token: ${{secrets.DEB_PKG_BOT_CI_TOKEN}}
           path: ./package-repo
           fetch-depth: 0
           fetch-tags: true
@@ -231,7 +231,7 @@ jobs:
         run: |
           cd ./package-repo
 
-          gh auth login --with-token <<< "${{secrets.DEB_PKG_BOT_CI_TOKEN}}"
+          gh auth login --with-token <<< "${{secrets.GITHUB_TOKEN}}"
 
           PR_TITLE="Promotion to ${{env.NEW_DEBIAN_VERSION}} (Artifactory tag: ${{inputs.new-tag}})"
 
