@@ -135,7 +135,7 @@ jobs:
           ALL_PKGS=$(grep-dctrl -n -s Package -r '' debian/control | sort -u)
 
           # Collect dev packages (Section: libdevel)
-          DEV_PKGS=$(grep-dctrl -n -F Section -e libdevel -s Package debian/control | sort -u)
+          DEV_PKGS=$(grep-dctrl -n -F Section -e libdevel -s Package debian/control | sort -u) || true
 
           # Compute MAIN = ALL - DEV (using comm on sorted lists)
           MAIN_PKGS=$(comm -23 <(printf '%s\n' "$ALL_PKGS") <(printf '%s\n' "$DEV_PKGS"))
