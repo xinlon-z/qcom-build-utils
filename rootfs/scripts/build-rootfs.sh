@@ -642,6 +642,13 @@ echo "[INFO] Writing static /etc/resolv.conf for runtime DNS resolution..."
 rm -f "$MNT_DIR/etc/resolv.conf"
 echo -e 'nameserver 1.1.1.1\nnameserver 8.8.8.8' > "$MNT_DIR/etc/resolv.conf"
 
+mkdir -p $MNT_DIR/etc/netplan/
+cat <<EOF > "$MNT_DIR/etc/netplan/01-network-manager-all.yaml"
+network:
+    version: 2
+    renderer: NetworkManager
+EOF
+
 umount -l "$MNT_DIR"
 
 # ==============================================================================
