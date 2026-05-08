@@ -152,8 +152,8 @@ runs:
           lintian_flag="--no-run-lintian"
         fi
 
-        if curl -sfI "https://qartifactory-edge.qualcomm.com/ui/native/qsc-deb-releases/dists/${{inputs.distro-codename}}/Release" > /dev/null; then
-          EXTRA_REPO="--extra-repository='deb [arch=arm64 trusted=yes] https://qartifactory-edge.qualcomm.com/ui/native/qsc-deb-releases ${{inputs.distro-codename}} main'"
+        if curl -sfI "https://qartifactory-edge.qualcomm.com/artifactory/qsc-deb-releases/dists/${{inputs.distro-codename}}/Release" > /dev/null; then
+          EXTRA_REPO="--extra-repository='deb [arch=arm64 trusted=yes] https://qartifactory-edge.qualcomm.com/artifactory/qsc-deb-releases ${{inputs.distro-codename}} main'"
         else
           EXTRA_REPO=""
         fi
