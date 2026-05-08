@@ -146,16 +146,14 @@ runs:
       run: |
         cd ${{inputs.pkg-dir}}
 
+        # GitHub Actions container jobs use HOME=/github/home by default, but the
+        # builder images bake the sbuild config and unshare tarballs under /root.
+        export HOME=/root
+
         if [[ "${{inputs.run-lintian}}" == "true" ]]; then
           lintian_flag="--run-lintian"
         else
           lintian_flag="--no-run-lintian"
-        fi
-
-        if curl -sfI "https://qartifactory-edge.qualcomm.com/artifactory/qsc-deb-releases/dists/${{inputs.distro-codename}}/Release" > /dev/null; then
-          EXTRA_REPO="--extra-repository='deb [arch=arm64 trusted=yes] https://qartifactory-edge.qualcomm.com/artifactory/qsc-deb-releases ${{inputs.distro-codename}} main'"
-        else
-          EXTRA_REPO=""
         fi
 
         # Resolve the build output directory to an absolute path now, before any
@@ -203,7 +201,6 @@ runs:
                    $lintian_flag \
                    --build-dir "$BUILD_DIR_ABS" \
                    --build-dep-resolver=apt \
-                   $EXTRA_REPO \
                    "$DSC_FILE"
           else
             # ℹ️ Prebuilt mode + native source format: invoke sbuild directly —
@@ -215,8 +212,7 @@ runs:
                    --dist=${{inputs.distro-codename}} \
                    $lintian_flag \
                    --build-dir "$BUILD_DIR_ABS" \
-                   --build-dep-resolver=apt \
-                   $EXTRA_REPO
+                   --build-dep-resolver=apt
           fi
 
         else
@@ -234,8 +230,7 @@ runs:
                                   --dist=${{inputs.distro-codename}} \
                                   $lintian_flag \
                                   --build-dir $BUILD_DIR_ABS \
-                                  --build-dep-resolver=apt \
-                                  $EXTRA_REPO"
+                                  --build-dep-resolver=apt"
         fi
 
         RET=$?
