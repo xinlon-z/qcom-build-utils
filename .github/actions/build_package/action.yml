@@ -152,8 +152,8 @@ runs:
           lintian_flag="--no-run-lintian"
         fi
 
-        if curl -sfI "https://qartifactory-edge.qualcomm.com/ui/native/qsc-deb-releases/dists/${{inputs.distro-codename}}/Release" > /dev/null; then
-          EXTRA_REPO="--extra-repository='deb [arch=arm64 trusted=yes] https://qartifactory-edge.qualcomm.com/ui/native/qsc-deb-releases ${{inputs.distro-codename}} main'"
+        if curl -sfI "https://qartifactory-edge.qualcomm.com/artifactory/qsc-deb-releases/dists/${{inputs.distro-codename}}/Release" > /dev/null; then
+          EXTRA_REPO="--extra-repository='deb [arch=arm64 trusted=yes] https://qartifactory-edge.qualcomm.com/artifactory/qsc-deb-releases ${{inputs.distro-codename}} main'"
         else
           EXTRA_REPO=""
         fi
@@ -246,8 +246,8 @@ runs:
           BUILD_LOG=$(find "$BUILD_DIR_ABS" -maxdepth 1 -name "*.build" ! -type l)
 
           if [[ -n "$BUILD_LOG" ]]; then
-            tail -n 500 "$BUILD_LOG"
-            echo "❌ Build failed, printed the last 500 lines of the build log file"
+            cat "$BUILD_LOG"
+            echo "❌ Build failed, printed the full build log file"
           else
             echo "❌ Build failed, but no .build log file was found to print"
           fi
