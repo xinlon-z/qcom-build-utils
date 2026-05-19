@@ -38,8 +38,8 @@
 #     4. Concatenates all DTBs (in manifest order) into a single combined
 #        DTB file: <DTB_SRC>/combined-dtb.dtb
 #     5. Creates a FAT image of configurable size.
-#     6. Mounts the FAT image via a loop device and copies the combined DTB
-#        into the image root.
+#     6. Copies the combined DTB into the FAT image via mtools (no loop/mount,
+#        runs as a normal user).
 #
 # Usage:
 #   ./build-dtb-image.sh \
@@ -73,7 +73,7 @@
 #     6. Pack qclinux_fit.img into a FAT image (same pipeline as Mode A).
 #
 #   Usage:
-#     sudo ./build-dtb-image.sh \
+#     ./build-dtb-image.sh \
 #         --fit-image \
 #         (--kernel-deb <path/to/kernel.deb> | --dtb-src <path/to/dtb/dir>) \
 #         [--metadata-commit <commit|tag|ref>] \
@@ -113,14 +113,14 @@
 # Requirements / Assumptions:
 #   - Linux host with:
 #       * bash
-#       * mkfs.vfat
-#       * losetup
-#       * mount / umount
-#       * dd (status=progress support is nice but not required)
-#       * mountpoint
-#       * dpkg-deb (only required for --kernel-deb mode)
+#       * mkfs.vfat   (dosfstools)
+#       * mcopy       (mtools)
+#       * dd
+#       * mktemp
+#       * dpkg-deb, tar (only required for --kernel-deb mode)
 #       * git, dtc, mkimage  (only required for --fit-image mode)
-#   - This script must be run as root (no internal sudo calls).
+#   - This script runs as a normal user. No root privileges are required;
+#     the FAT image is built directly via mtools (no loop device, no mount).
 #
 # Notes:
 #   - The combined DTB is written to: <DTB_SRC>/combined-dtb.dtb
@@ -130,20 +130,12 @@
 #       combined DTB will be written there (same behavior as before).
 #   - The resulting FAT image contains exactly one file: combined-dtb.dtb
 #     in the root directory of the filesystem.
-#   - The script installs a cleanup trap to:
-#       * unmount the image,
-#       * detach the loop device,
-#       * delete temporary files and directories.
+#   - The script installs a cleanup trap to remove temporary files and
+#     directories on exit.
 #
 # =============================================================================
 
 set -euo pipefail
-
-# Require running as root (needed for losetup, mkfs, mount, etc.)
-if [[ "${EUID}" -ne 0 ]]; then
-    echo "[ERROR] This script must be run as root (no internal sudo calls)." >&2
-    exit 1
-fi
 
 # ----------------------------- Defaults --------------------------------------
 
@@ -157,8 +149,6 @@ KERNEL_DEB=""          # Optional: kernel .deb input (preferred mode)
 DEB_DIR=""             # Temporary extraction directory when using --kernel-deb
 
 SANLIST=""             # Will hold the path to the sanitized DTB list
-MNT_DIR=""             # Temporary mount directory
-LOOP_DEV=""            # Loop device used for the FAT image
 
 # FIT DTB image mode (OFF by default)
 BUILD_FIT_DTB=0
@@ -213,23 +203,6 @@ require_cmd() {
 cleanup() {
     # Preserve the original exit status so we can exit with the right code
     local status=$?
-
-    # Ensure any buffered writes are flushed (best-effort)
-    sync || true
-
-    # Unmount the mountpoint if it exists and is currently mounted
-    if [[ -n "${MNT_DIR:-}" && -d "$MNT_DIR" ]]; then
-        if mountpoint -q "$MNT_DIR"; then
-            umount "$MNT_DIR" || true
-        fi
-        # Try to remove the temporary directory (ignore failures)
-        rmdir "$MNT_DIR" 2>/dev/null || true
-    fi
-
-    # Detach loop device if it was created
-    if [[ -n "${LOOP_DEV:-}" ]]; then
-        losetup -d "$LOOP_DEV" || true
-    fi
 
     # Remove temporary sanitized list
     if [[ -n "${SANLIST:-}" && -f "$SANLIST" ]]; then
@@ -334,11 +307,8 @@ fi
 # Basic command requirements
 require_cmd awk
 require_cmd dd
-require_cmd losetup
 require_cmd mkfs.vfat
-require_cmd mount
-require_cmd umount
-require_cmd mountpoint
+require_cmd mcopy
 require_cmd mktemp
 require_cmd ls
 require_cmd cat
@@ -360,11 +330,15 @@ if [[ -n "${KERNEL_DEB}" ]]; then
     fi
 
     require_cmd dpkg-deb
+    require_cmd tar
 
-    # Extract the .deb into a temporary directory
+    # Extract the .deb into a temporary directory.
+    # Use --fsys-tarfile | tar with --no-same-owner/--no-same-permissions so
+    # extraction works as a non-root user (dpkg-deb -R would try to chown).
     DEB_DIR="$(mktemp -d -t kernel-deb-XXXXXX)"
     echo "[INFO] Extracting kernel .deb to: ${DEB_DIR}"
-    dpkg-deb -R "${KERNEL_DEB}" "${DEB_DIR}"
+    dpkg-deb --fsys-tarfile "${KERNEL_DEB}" \
+        | tar -x --no-same-owner --no-same-permissions -C "${DEB_DIR}"
 
     # Locate the DTB directory from the extracted .deb.
     # Probe in order (most to least preferred):
@@ -470,27 +444,17 @@ if [[ "${BUILD_FIT_DTB}" -eq 0 ]]; then
     echo "[INFO] Creating FAT image '${DTB_BIN}' (${DTB_BIN_SIZE} MB)..."
     dd if=/dev/zero of="${DTB_BIN}" bs=1M count="${DTB_BIN_SIZE}" status=progress
 
-    # Attach a loop device to the image
-    LOOP_DEV="$(losetup --show -fP "${DTB_BIN}")"
-    echo "[INFO] Using loop device: ${LOOP_DEV}"
-
-    # Create a temporary mount directory for this run
-    MNT_DIR="$(mktemp -d -t dtb-mnt-XXXXXX)"
-
-    # Format the loop device with FAT (4 KiB logical sector size)
-    echo "[INFO] Formatting ${LOOP_DEV} as FAT with 4 KiB sector size..."
-    mkfs.vfat -S 4096 "${LOOP_DEV}" >/dev/null
-
-    # Mount the loop device
-    echo "[INFO] Mounting ${LOOP_DEV} at ${MNT_DIR}..."
-    mount "${LOOP_DEV}" "${MNT_DIR}"
+    # Format the image file directly (no loop device required).
+    echo "[INFO] Formatting ${DTB_BIN} as FAT with 4 KiB sector size..."
+    mkfs.vfat -S 4096 "${DTB_BIN}" >/dev/null
 
     # ----------------------- Deploy Combined DTB ---------------------------------
 
-    cp "${OUT}" "${MNT_DIR}/"
+    # Copy the combined DTB into the FAT image via mtools (no mount required).
+    mcopy -i "${DTB_BIN}" "${OUT}" ::/
     echo "[INFO] Deployed combined DTB into FAT image."
     echo "[INFO] Files in image:"
-    ls -lh "${MNT_DIR}"
+    mdir -i "${DTB_BIN}" ::
 
 # FIT DTB Image Mode
 else
@@ -583,24 +547,16 @@ else
     echo "[INFO] Creating FAT image '${DTB_BIN}' (${DTB_BIN_SIZE} MB)..."
     dd if=/dev/zero of="${DTB_BIN}" bs=1M count="${DTB_BIN_SIZE}" status=progress
 
-    LOOP_DEV="$(losetup --show -fP "${DTB_BIN}")"
-    echo "[INFO] Using loop device: ${LOOP_DEV}"
-
-    MNT_DIR="$(mktemp -d -t dtb-mnt-XXXXXX)"
-
-    echo "[INFO] Formatting ${LOOP_DEV} as FAT with 4 KiB sector size..."
-    mkfs.vfat -S 4096 "${LOOP_DEV}" >/dev/null
-
-    echo "[INFO] Mounting ${LOOP_DEV} at ${MNT_DIR}..."
-    mount "${LOOP_DEV}" "${MNT_DIR}"
+    echo "[INFO] Formatting ${DTB_BIN} as FAT with 4 KiB sector size..."
+    mkfs.vfat -S 4096 "${DTB_BIN}" >/dev/null
 
     # -----------------------------------------------------------------------
     # Step 7. Deploy FIT DTB Image
     # -----------------------------------------------------------------------
-    cp "${FIT_STAGE}/out/qclinux_fit.img" "${MNT_DIR}/"
+    mcopy -i "${DTB_BIN}" "${FIT_STAGE}/out/qclinux_fit.img" ::/
     echo "[INFO] Deployed qclinux_fit.img into FAT image."
     echo "[INFO] Files in image:"
-    ls -lh "${MNT_DIR}"
+    mdir -i "${DTB_BIN}" ::
 fi
 
 
