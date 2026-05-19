@@ -367,6 +367,19 @@ fi
 
 if [[ "$USE_MANIFEST" -eq 1 && -n "$MANIFEST" ]]; then
     echo "[INFO] Adding custom apt sources from manifest..."
+
+    # Create keyrings directory if it doesn't exist
+    mkdir -p "$ROOTFS_DIR/etc/apt/keyrings"
+
+    # Check if keyrings directory exists alongside the manifest
+    MANIFEST_DIR=$(dirname "$MANIFEST")
+    KEYRINGS_DIR="$MANIFEST_DIR/keyrings"
+
+    if [[ -d "$KEYRINGS_DIR" ]]; then
+        echo "[INFO] Copying keyring files from $KEYRINGS_DIR..."
+        cp -v "$KEYRINGS_DIR"/*.asc "$ROOTFS_DIR/etc/apt/keyrings/" 2>/dev/null || true
+    fi
+
     jq -c '.apt_sources[]?' "$MANIFEST" | while read -r row; do
         NAME=$(echo "$row" | jq -r '.name // "customrepo"')
         SRC_LINE=$(echo "$row" | jq -r '.source_line')
@@ -482,7 +495,7 @@ GRUB_SERIAL_COMMAND="serial --speed=115200 --unit=0 --word=8 --parity=no --stop=
 
 # Kernel parameters applied to BOTH Normal and Recovery boot modes
 # (Critical hardware settings: console, rootfs, clocks, EFI)
-GRUB_CMDLINE_LINUX="earlycon console=ttyMSM0,115200n8 root=LABEL=system cma=128M rw clk_ignore_unused pd_ignore_unused rootwait ignore_loglevel"
+GRUB_CMDLINE_LINUX="earlycon console=ttyMSM0,115200n8 root=LABEL=system cma=128M net.ifnames=0 rw clk_ignore_unused pd_ignore_unused rootwait ignore_loglevel"
 
 # Kernel parameters applied ONLY to Normal boot mode
 # (UX settings: quiet, splash, etc. - Left empty for verbose output)
@@ -550,6 +563,10 @@ dpkg-query -W -f='\${Package} \${Version}\n' > /tmp/\${CODENAME}_base.manifest
 echo '[CHROOT] Installing custom firmware and kernel...'
 $CMD_FW_INSTALL
 yes \"\" | dpkg -i /$(basename "$KERNEL_DEB")
+
+# Run update-grub explicitly: the zz-update-grub hook skips it in a chroot
+# because systemd is not running (/run/systemd/system absent).
+update-grub
 
 adduser --disabled-password --gecos '' qcom
 echo 'qcom:qcom' | chpasswd
@@ -637,6 +654,13 @@ cp -rap "$ROOTFS_DIR/"* "$MNT_DIR/"
 echo "[INFO] Writing static /etc/resolv.conf for runtime DNS resolution..."
 rm -f "$MNT_DIR/etc/resolv.conf"
 echo -e 'nameserver 1.1.1.1\nnameserver 8.8.8.8' > "$MNT_DIR/etc/resolv.conf"
+
+mkdir -p $MNT_DIR/etc/netplan/
+cat <<EOF > "$MNT_DIR/etc/netplan/01-network-manager-all.yaml"
+network:
+    version: 2
+    renderer: NetworkManager
+EOF
 
 umount -l "$MNT_DIR"
 
